@@ -17,21 +17,6 @@ pub fn main() !void {
 
     const regex: mvzr.Regex = mvzr.compile(pattern) orelse return error.BadPattern;
 
-    const file = args.next();
-
-    var source: std.fs.File = undefined;
-
-    var opened_file = false;
-    if (file) | f| {
-        source = try std.fs.cwd().openFile(f, .{});
-        opened_file = true;
-    }else {
-        source =  std.fs.File.stdin();
-    }
-
-    var read_buf: [100]u8 = undefined;
-    var reader = source.reader(&read_buf);
-
     var stdout_buf: [1024]u8 = undefined;
     const stdout_file = std.fs.File.stdout();
     var stdout = stdout_file.writer(&stdout_buf);
@@ -39,14 +24,62 @@ pub fn main() !void {
     var writer = std.Io.Writer.Allocating.init(gpa);
     defer writer.deinit();
 
+    var files = try std.ArrayList([:0]const u8).initCapacity(gpa, 5);
+    defer files.deinit(gpa);
+
+    while (args.next()) | file | {
+        try files.append(gpa, file);
+    }
+
+    var read_buf: [1024]u8 = undefined;
+
+    if (files.items.len == 0) {
+        const source = std.fs.File.stdin();
+        var reader = source.reader(&read_buf);
+        try search(&reader.interface, regex, &writer, &stdout.interface, null);
+    }
+
+    for (files.items) |file_name | {
+        var source = try std.fs.cwd().openFile(file_name, .{.mode = .read_only});
+        defer source.close();
+        var reader = source.reader(&read_buf);
+        try search(&reader.interface, regex, &writer, &stdout.interface, file_name);
+    }
+}
+
+
+fn search(
+    source: *std.Io.Reader,
+    pattern: mvzr.Regex,
+    writer: *std.Io.Writer.Allocating,
+    stdout: *std.Io.Writer,
+    file_name: ?[]const u8) !void {
+
     while (true) {
-        if (reader.interface.streamDelimiter(&writer.writer, '\n')) | _ | {
+        if (source.streamDelimiter(&writer.writer, '\n')) | _ | {
             const line = writer.written();
-            if (regex.isMatch(line)) {
-                try stdout.interface.print("{s}\n", .{line});
+            var reg_iterator = pattern.iterator(line);
+            var current: usize = 0;
+
+            while (reg_iterator.next()) |match | {
+
+                if (file_name) |name | {
+                    try stdout.print("{s}:{s}\x1b[31m{s}\x1b[0m", .{name, line[current..match.start], match.slice});
+
+                }else {
+                    try stdout.print("{s}\x1b[31m{s}\x1b[0m", .{line[current..match.start], match.slice});
+                }
+
+                current = match.end;
             }
+
+            if (current > 0) {
+                try stdout.print("{s}\n", .{line[current..]});
+            }
+
             writer.clearRetainingCapacity();
-            reader.interface.toss(1);
+            source.toss(1);
+
         }else |err| switch (err) {
             error.EndOfStream => {
                 break;
@@ -56,12 +89,5 @@ pub fn main() !void {
             },
         }
     }
-
-    try stdout.interface.flush();
-
-    if (opened_file) {
-        source.close();
-    }
-
+    try stdout.flush();
 }
-
