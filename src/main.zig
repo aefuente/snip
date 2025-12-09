@@ -61,15 +61,18 @@ fn search(
             var reg_iterator = pattern.iterator(line);
             var current: usize = 0;
 
-            while (reg_iterator.next()) |match | {
-
+            if (reg_iterator.next()) |match | {
                 if (file_name) |name | {
                     try stdout.print("{s}:{s}\x1b[31m{s}\x1b[0m", .{name, line[current..match.start], match.slice});
 
                 }else {
                     try stdout.print("{s}\x1b[31m{s}\x1b[0m", .{line[current..match.start], match.slice});
                 }
+                current = match.end;
+            }
 
+            while (reg_iterator.next()) |match | {
+                try stdout.print("{s}\x1b[31m{s}\x1b[0m", .{line[current..match.start], match.slice});
                 current = match.end;
             }
 
